@@ -1,0 +1,55 @@
+name: "Bot 1 — Site Watchdog"
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"   # every 2 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run Site Watchdog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agents/run_bot.py --bot watchdog
+
+      - name: Open GitHub Issue on alerts
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[WATCHDOG ALERT] Site issue detected — ${new Date().toISOString()}`,
+              body: 'The Site Watchdog bot detected an issue. Check `data/watchdog/last-scan.json` for details.',
+              labels: ['watchdog-alert', 'automated']
+            })
+
+      - name: Commit scan results
+        run: |
+          git config user.email "geo-bot@users.noreply.github.com"
+          git config user.name "GEO War Room Bot"
+          git add data/watchdog/ logs/
+          git diff --staged --quiet || git commit -m "watchdog: scan $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push

@@ -1,0 +1,69 @@
+name: "Bot 6 — Review Sentinel"
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  review-sentinel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run Review Sentinel
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_BUSINESS_API_KEY: ${{ secrets.GOOGLE_BUSINESS_API_KEY }}
+          YELP_API_KEY: ${{ secrets.YELP_API_KEY }}
+          BRAND_NAME: ${{ secrets.BRAND_NAME }}
+        run: python agents/run_bot.py --bot review-sentinel
+
+      - name: Open urgent issue for negative reviews
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const draftsDir = 'data/sentinel/drafts';
+            if (!fs.existsSync(draftsDir)) return;
+
+            const files = fs.readdirSync(draftsDir).filter(f => f.includes(new Date().toISOString().slice(0,10)));
+            const negativeFiles = files.filter(f => {
+              const content = fs.readFileSync(`${draftsDir}/${f}`, 'utf8');
+              return content.includes('Rating: 1/5') || content.includes('Rating: 2/5');
+            });
+
+            if (negativeFiles.length > 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[URGENT] ${negativeFiles.length} negative review(s) need response — ${new Date().toISOString().slice(0,10)}`,
+                body: `## Negative Review Alert\n\n**${negativeFiles.length}** new negative review(s) detected.\n\nDraft replies are ready in \`data/sentinel/drafts/\`.\n\nReview, approve, and post responses within 24 hours.`,
+                labels: ['negative-review', 'urgent', 'automated']
+              });
+            }
+
+      - name: Commit review drafts
+        run: |
+          git config user.email "geo-bot@users.noreply.github.com"
+          git config user.name "GEO War Room Bot"
+          git add data/sentinel/ logs/
+          git diff --staged --quiet || git commit -m "review-sentinel: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
