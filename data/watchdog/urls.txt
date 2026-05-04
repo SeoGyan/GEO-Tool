@@ -1,0 +1,9 @@
+# Site Watchdog — URLs to Monitor
+# Add one URL per line. Lines starting with # are ignored.
+# Bot 1 checks these every 2 hours for status, speed, and schema.
+
+https://yourdomain.com
+https://yourdomain.com/blog
+https://yourdomain.com/pricing
+https://yourdomain.com/about
+https://yourdomain.com/contact

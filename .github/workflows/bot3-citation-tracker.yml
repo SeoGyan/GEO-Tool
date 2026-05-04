@@ -1,0 +1,51 @@
+name: "Bot 3 — AI Citation Tracker"
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"   # every 12 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  citation-tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run Citation Tracker
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          BRAND_NAME: ${{ secrets.BRAND_NAME }}
+        run: python agents/run_bot.py --bot citation-tracker
+
+      - name: Commit scorecard
+        run: |
+          git config user.email "geo-bot@users.noreply.github.com"
+          git config user.name "GEO War Room Bot"
+          git add data/citation/ logs/
+          git diff --staged --quiet || git commit -m "citation-tracker: scorecard update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
+
+      - name: Generate weekly GEO report (Mondays only)
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          DAY=$(date -u +%u)
+          if [ "$DAY" = "1" ]; then
+            python agents/weekly_report.py --bot citation 2>/dev/null || true
+          fi

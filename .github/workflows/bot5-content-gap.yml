@@ -1,0 +1,53 @@
+name: "Bot 5 — Content Gap Hunter"
+
+on:
+  schedule:
+    - cron: "0 6,18 * * *"   # every 12 hours (6am and 6pm UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  content-gap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run Content Gap Hunter
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agents/run_bot.py --bot content-gap
+
+      - name: Generate content briefs (Fridays only)
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          DAY=$(date -u +%u)
+          if [ "$DAY" = "5" ]; then
+            python agents/generate_briefs.py 2>/dev/null || echo "Brief generator not yet configured"
+          fi
+
+      - name: Commit gap analysis
+        run: |
+          git config user.email "geo-bot@users.noreply.github.com"
+          git config user.name "GEO War Room Bot"
+          git add data/content-gap/ logs/
+          git diff --staged --quiet || git commit -m "content-gap: analysis update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push

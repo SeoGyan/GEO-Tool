@@ -1,0 +1,67 @@
+name: "Bot 2 — Reddit Scout"
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"   # every 4 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  reddit-scout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run Reddit Scout
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_SECRET: ${{ secrets.REDDIT_SECRET }}
+        run: python agents/run_bot.py --bot reddit-scout
+
+      - name: Create PR for draft approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const draftsDir = 'data/scout/drafts';
+            if (!fs.existsSync(draftsDir)) return;
+
+            const files = fs.readdirSync(draftsDir).filter(f => f.endsWith('.md'));
+            if (files.length === 0) return;
+
+            const { execSync } = require('child_process');
+            const branch = `reddit-drafts-${Date.now()}`;
+            execSync(`git config user.email "geo-bot@users.noreply.github.com"`);
+            execSync(`git config user.name "GEO War Room Bot"`);
+            execSync(`git checkout -b ${branch}`);
+            execSync(`git add data/scout/drafts/`);
+            execSync(`git commit -m "reddit-scout: ${files.length} new draft(s) for approval"`);
+            execSync(`git push origin ${branch}`);
+
+            await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[REDDIT DRAFTS] ${files.length} reply draft(s) ready for review`,
+              head: branch,
+              base: 'main',
+              body: `## Reddit Reply Drafts\n\nThe Reddit Scout found **${files.length}** new thread(s) with buyer intent.\n\nReview each draft in \`data/scout/drafts/\`. Merge to approve posting.\n\n> Never post directly. All replies need human review first.`,
+              labels: ['reddit-draft', 'needs-review']
+            });

@@ -1,0 +1,164 @@
+name: "Weekly Reports"
+
+on:
+  schedule:
+    - cron: "0 8 * * 0"   # Sunday 8am UTC — technical health report
+    - cron: "0 8 * * 1"   # Monday 8am UTC — GEO scorecard
+    - cron: "0 8 * * 5"   # Friday 8am UTC — content briefs
+  workflow_dispatch:
+    inputs:
+      report_type:
+        description: "Which report to generate"
+        required: true
+        type: choice
+        options:
+          - technical-health
+          - geo-scorecard
+          - content-briefs
+          - all
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  weekly-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Determine report type
+        id: report-type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ inputs.report_type }}" >> $GITHUB_OUTPUT
+          else
+            DAY=$(date -u +%u)
+            case $DAY in
+              7) echo "type=technical-health" >> $GITHUB_OUTPUT ;;
+              1) echo "type=geo-scorecard" >> $GITHUB_OUTPUT ;;
+              5) echo "type=content-briefs" >> $GITHUB_OUTPUT ;;
+              *) echo "type=none" >> $GITHUB_OUTPUT ;;
+            esac
+          fi
+
+      - name: Generate Technical Health Report
+        if: ${{ steps.report-type.outputs.type == 'technical-health' || steps.report-type.outputs.type == 'all' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          from pathlib import Path
+          from datetime import datetime, timezone
+
+          data = Path("data/watchdog/last-scan.json")
+          report_dir = Path("data/watchdog/reports")
+          report_dir.mkdir(parents=True, exist_ok=True)
+
+          scan = json.loads(data.read_text()) if data.exists() else {}
+          now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+          pages = scan.get("pages", [])
+          alerts = scan.get("alerts", [])
+          healthy = sum(1 for p in pages if p.get("status") == "ok")
+          avg_time = sum(p.get("response_time_ms", 0) for p in pages) / max(len(pages), 1)
+
+          report = f"""# Technical Health Report — {now}
+
+          ## Summary
+          - Pages Monitored: {len(pages)}
+          - Healthy: {healthy}/{len(pages)}
+          - Active Alerts: {len(alerts)}
+          - Avg Response Time: {avg_time:.0f}ms
+
+          ## Alerts
+          {"- " + chr(10).join(a.get("issue","") for a in alerts) if alerts else "None"}
+
+          ## Page Status
+          | URL | Status | Response Time |
+          |-----|--------|---------------|
+          """ + "\n".join(f"| {p.get('url','?')} | {p.get('status','?')} | {p.get('response_time_ms',0)}ms |" for p in pages)
+
+          (report_dir / f"health-{now}.md").write_text(report)
+          print(f"Health report saved for {now}")
+          EOF
+
+      - name: Generate GEO Scorecard
+        if: ${{ steps.report-type.outputs.type == 'geo-scorecard' || steps.report-type.outputs.type == 'all' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          from pathlib import Path
+          from datetime import datetime, timezone
+          from collections import Counter
+
+          scorecard_file = Path("data/citation/scorecard.json")
+          report_dir = Path("data/citation/reports")
+          report_dir.mkdir(parents=True, exist_ok=True)
+
+          if not scorecard_file.exists():
+            print("No scorecard data yet.")
+            exit(0)
+
+          entries = json.loads(scorecard_file.read_text())
+          recent = entries[-14:] if isinstance(entries, list) else []
+          now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+          all_results = [r for e in recent for r in e.get("results", [])]
+          total = len(all_results)
+          cited = sum(1 for r in all_results if r.get("brand_mentioned"))
+          rate = round((cited / total * 100) if total else 0, 1)
+          competitors = Counter(c for r in all_results for c in r.get("competitors_cited", []))
+
+          report = f"""# GEO Scorecard — Week of {now}
+
+          ## Citation Rate
+          - Brand Cited: {cited}/{total} queries ({rate}%)
+          - Trend: {"UP" if rate > 30 else "DOWN" if rate < 20 else "FLAT"}
+
+          ## Top Competitors in AI Results
+          """ + "\n".join(f"- {name}: {count} citations" for name, count in competitors.most_common(5))
+
+          (report_dir / f"geo-scorecard-{now}.md").write_text(report)
+          print(f"GEO scorecard saved for {now}")
+          EOF
+
+      - name: Commit reports
+        run: |
+          git config user.email "geo-bot@users.noreply.github.com"
+          git config user.name "GEO War Room Bot"
+          git add data/ logs/
+          git diff --staged --quiet || git commit -m "weekly-report: ${{ steps.report-type.outputs.type }} $(date -u +'%Y-%m-%d')"
+          git push
+
+      - name: Create GitHub Issue with report summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const type = '${{ steps.report-type.outputs.type }}';
+            if (type === 'none') return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[WEEKLY REPORT] ${type} — ${new Date().toISOString().slice(0,10)}`,
+              body: `Weekly **${type}** report has been generated and committed to the repository.\n\nSee the \`data/\` folder for the full report.`,
+              labels: ['weekly-report', 'automated']
+            });

@@ -1,0 +1,72 @@
+name: "Bot 4 — X Engagement Agent"
+
+on:
+  schedule:
+    - cron: "30 */2 * * *"   # every 2 hours, offset by 30min from watchdog
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  x-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run X Engagement Agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+        run: python agents/run_bot.py --bot x-agent
+
+      - name: Create PR for draft approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const draftsDir = 'data/x-agent/drafts';
+            if (!fs.existsSync(draftsDir)) return;
+
+            const files = fs.readdirSync(draftsDir).filter(f => f.endsWith('.md'));
+            if (files.length === 0) return;
+
+            const { execSync } = require('child_process');
+            const branch = `x-drafts-${Date.now()}`;
+            execSync(`git config user.email "geo-bot@users.noreply.github.com"`);
+            execSync(`git config user.name "GEO War Room Bot"`);
+            execSync(`git checkout -b ${branch}`);
+            execSync(`git add data/x-agent/`);
+            execSync(`git commit -m "x-agent: ${files.length} new draft(s) for approval"`);
+            execSync(`git push origin ${branch}`);
+
+            await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[X DRAFTS] ${files.length} reply draft(s) ready for review`,
+              head: branch,
+              base: 'main',
+              body: `## X (Twitter) Reply Drafts\n\nThe X Engagement Agent found **${files.length}** new thread(s) to engage with.\n\nReview each draft in \`data/x-agent/drafts/\`. Merge to approve.\n\n> Never post directly. All replies need human review first.`,
+            });
+
+      - name: Commit trending topics
+        run: |
+          git config user.email "geo-bot@users.noreply.github.com"
+          git config user.name "GEO War Room Bot"
+          git add data/x-agent/trending.md logs/ 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "x-agent: trending topics $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push

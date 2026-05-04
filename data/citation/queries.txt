@@ -1,0 +1,15 @@
+# Citation Tracker — Target Queries
+# Bot 3 runs these queries through Perplexity and ChatGPT every 12 hours.
+# These should be the questions your ideal customer asks AI engines.
+# One query per line. Lines starting with # are ignored.
+
+best SEO tool for SaaS companies
+how to rank in AI search results
+what is GEO vs SEO
+best tool for tracking AI citations
+how to get cited by ChatGPT
+how to appear in Google AI Overviews
+best content strategy for 2025
+top SEO agencies for AI search
+how to optimize for Perplexity
+what tools do SEO agencies use in 2025
